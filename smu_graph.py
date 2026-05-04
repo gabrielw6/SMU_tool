@@ -7,6 +7,7 @@ Provides both CLI and GUI interfaces.
 
 import argparse
 import csv
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +27,7 @@ try:
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
         QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QRadioButton,
-        QButtonGroup, QGroupBox, QFormLayout, QMessageBox, QProgressDialog
+        QButtonGroup, QGroupBox, QFormLayout, QMessageBox, QProgressDialog, QTextEdit, QFileDialog
     )
 except ImportError:
     try:
@@ -35,7 +36,7 @@ except ImportError:
         from PySide2.QtWidgets import (
             QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
             QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QRadioButton,
-            QButtonGroup, QGroupBox, QFormLayout, QMessageBox, QProgressDialog
+            QButtonGroup, QGroupBox, QFormLayout, QMessageBox, QProgressDialog, QTextEdit, QFileDialog
         )
     except ImportError as exc:
         raise ImportError(
@@ -215,6 +216,8 @@ class SMUControlPanel(QWidget):
         self.instrument = None
         self.plot_callback = plot_callback  # Callback to update plot in main window
         self.sweep_thread = None
+        self.model_type = "resistive"
+        self.model_order = 2
         self.init_ui()
 
     def init_ui(self):
@@ -245,6 +248,37 @@ class SMUControlPanel(QWidget):
 
         conn_group.setLayout(conn_layout)
         layout.addWidget(conn_group)
+
+        # Model Configuration Section
+        model_group = QGroupBox("Model Configuration")
+        model_layout = QVBoxLayout()
+
+        # Model type
+        type_layout = QHBoxLayout()
+        self.type_group = QButtonGroup()
+        self.resistive_radio = QRadioButton("Resistive")
+        self.resistive_radio.setChecked(True)
+        self.semiconductor_radio = QRadioButton("Semiconductor")
+        self.type_group.addButton(self.resistive_radio)
+        self.type_group.addButton(self.semiconductor_radio)
+        type_layout.addWidget(self.resistive_radio)
+        type_layout.addWidget(self.semiconductor_radio)
+        model_layout.addLayout(type_layout)
+
+        # Model order
+        order_layout = QHBoxLayout()
+        self.order_group = QButtonGroup()
+        self.first_radio = QRadioButton("First Order")
+        self.second_radio = QRadioButton("Second Order")
+        self.second_radio.setChecked(True)
+        self.order_group.addButton(self.first_radio)
+        self.order_group.addButton(self.second_radio)
+        order_layout.addWidget(self.first_radio)
+        order_layout.addWidget(self.second_radio)
+        model_layout.addLayout(order_layout)
+
+        model_group.setLayout(model_layout)
+        layout.addWidget(model_group)
 
         # Acquisition Parameters Section
         acq_group = QGroupBox("Acquisition Parameters")
@@ -295,20 +329,40 @@ class SMUControlPanel(QWidget):
         # Control Buttons
         button_layout = QHBoxLayout()
         
+        config_button_group = QVBoxLayout()
         self.send_config_btn = QPushButton("Send Configuration")
         self.send_config_btn.clicked.connect(self.on_send_config)
         self.send_config_btn.setEnabled(False)
-        button_layout.addWidget(self.send_config_btn)
+        config_button_group.addWidget(self.send_config_btn)
         
+        self.config_status_label = QLabel("")
+        self.config_status_label.setAlignment(Qt.AlignCenter)
+        self.config_status_label.setStyleSheet("font-size: 9pt;")
+        config_button_group.addWidget(self.config_status_label)
+        button_layout.addLayout(config_button_group)
+        
+        sweep_button_group = QVBoxLayout()
         self.start_sweep_btn = QPushButton("Start Sweep")
         self.start_sweep_btn.clicked.connect(self.on_start_sweep)
         self.start_sweep_btn.setEnabled(False)
-        button_layout.addWidget(self.start_sweep_btn)
+        sweep_button_group.addWidget(self.start_sweep_btn)
+        
+        self.sweep_status_label = QLabel("")
+        self.sweep_status_label.setAlignment(Qt.AlignCenter)
+        self.sweep_status_label.setStyleSheet("font-size: 9pt;")
+        sweep_button_group.addWidget(self.sweep_status_label)
+        button_layout.addLayout(sweep_button_group)
         
         acq_layout.addRow(button_layout)
 
         acq_group.setLayout(acq_layout)
         layout.addWidget(acq_group)
+
+        # Connect model signals
+        self.resistive_radio.toggled.connect(self.on_model_type_changed)
+        self.semiconductor_radio.toggled.connect(self.on_model_type_changed)
+        self.first_radio.toggled.connect(self.on_model_order_changed)
+        self.second_radio.toggled.connect(self.on_model_order_changed)
 
         layout.addStretch()
         self.setLayout(layout)
@@ -357,11 +411,14 @@ class SMUControlPanel(QWidget):
         self.port_input.setEnabled(True)
         self.send_config_btn.setEnabled(False)
         self.start_sweep_btn.setEnabled(False)
+        self.config_status_label.setText("")
+        self.sweep_status_label.setText("")
 
     def on_send_config(self):
         """Send configuration to the instrument."""
         if not self.is_connected():
-            QMessageBox.warning(self, "Not Connected", "Please connect to the instrument first.")
+            self.config_status_label.setText("Not Connected")
+            self.config_status_label.setStyleSheet("color: #CC0000; font-size: 9pt;")
             return
         
         try:
@@ -371,7 +428,8 @@ class SMUControlPanel(QWidget):
             compliance = self.compliance_spin.value()
             
             if start >= stop:
-                QMessageBox.warning(self, "Invalid Range", "Start value must be less than stop value.")
+                self.config_status_label.setText("Invalid Range")
+                self.config_status_label.setStyleSheet("color: #CC0000; font-size: 9pt;")
                 return
             
             configure_b2901a_for_resistance_sweep(
@@ -381,14 +439,17 @@ class SMUControlPanel(QWidget):
                 points,
                 compliance,
             )
-            QMessageBox.information(self, "Configuration Sent", "Sweep configuration has been sent to the instrument.")
+            self.config_status_label.setText("Configuration Sent ✓")
+            self.config_status_label.setStyleSheet("color: #00CC00; font-size: 9pt;")
         except Exception as exc:
-            QMessageBox.critical(self, "Configuration Error", f"Failed to send configuration: {exc}")
+            self.config_status_label.setText(f"Failed: {str(exc)[:40]}")
+            self.config_status_label.setStyleSheet("color: #CC0000; font-size: 9pt;")
 
     def on_start_sweep(self):
         """Initiate the sweep measurement in a separate thread."""
         if not self.is_connected():
-            QMessageBox.warning(self, "Not Connected", "Please connect to the instrument first.")
+            self.sweep_status_label.setText("Not Connected")
+            self.sweep_status_label.setStyleSheet("color: #CC0000; font-size: 9pt;")
             return
         
         start = self.start_spin.value()
@@ -397,8 +458,13 @@ class SMUControlPanel(QWidget):
         compliance = self.compliance_spin.value()
         
         if start >= stop:
-            QMessageBox.warning(self, "Invalid Range", "Start value must be less than stop value.")
+            self.sweep_status_label.setText("Invalid Range")
+            self.sweep_status_label.setStyleSheet("color: #CC0000; font-size: 9pt;")
             return
+        
+        # Clear status and show running
+        self.sweep_status_label.setText("Running...")
+        self.sweep_status_label.setStyleSheet("color: #CCAA00; font-size: 9pt;")
         
         # Disable buttons during sweep
         self.start_sweep_btn.setEnabled(False)
@@ -422,16 +488,35 @@ class SMUControlPanel(QWidget):
         if self.plot_callback:
             self.plot_callback(voltages, currents)
         
-        QMessageBox.information(self, "Sweep Complete", f"Sweep completed. {len(voltages)} data points collected.")
+        self.sweep_status_label.setText(f"Complete: {len(voltages)} points ✓")
+        self.sweep_status_label.setStyleSheet("color: #00CC00; font-size: 9pt;")
 
     def on_sweep_error(self, error_msg):
         """Handle sweep error."""
         self.start_sweep_btn.setEnabled(True)
         self.send_config_btn.setEnabled(True)
-        QMessageBox.critical(self, "Sweep Error", f"Sweep failed: {error_msg}")
+        truncated_error = error_msg[:40] if len(error_msg) > 40 else error_msg
+        self.sweep_status_label.setText(f"Error: {truncated_error}")
+        self.sweep_status_label.setStyleSheet("color: #CC0000; font-size: 9pt;")
 
     def is_connected(self):
         return self.instrument is not None
+
+    def on_model_type_changed(self):
+        if self.semiconductor_radio.isChecked():
+            self.model_type = "semiconductor"
+            self.first_radio.setEnabled(False)
+            self.second_radio.setEnabled(False)
+        else:
+            self.model_type = "resistive"
+            self.first_radio.setEnabled(True)
+            self.second_radio.setEnabled(True)
+
+    def on_model_order_changed(self):
+        if self.first_radio.isChecked():
+            self.model_order = 1
+        else:
+            self.model_order = 2
 
     def disconnect(self):
         """Public disconnect method for external callers (e.g., window close event)."""
@@ -480,35 +565,104 @@ class SMUMainWindow(QMainWindow):
         # Create a new plot widget (in-process, not a separate window)
         # We'll use the SweepPlotWidget from smu_plot
         try:
-            from smu_plot import SweepPlotWidget, fit_linear, fit_quadratic
+            from smu_plot import SweepPlotWidget, fit_linear, fit_quadratic, fit_diode
             
-            # Fit linear model for now (default order=2 logic would fit quadratic)
-            coefficients = fit_linear(voltages, currents)
-            slope, intercept = coefficients
+            model_type = self.control_panel.model_type
+            model_order = self.control_panel.model_order
+            
+            if model_type == "resistive":
+                if model_order == 1:
+                    coefficients = fit_linear(voltages, currents)
+                    slope, intercept = coefficients
+                    order = 1
+                    diode = False
+                    if abs(slope) > 1e-18:
+                        equation_text = (
+                            f"Linear Fit:\n"
+                            f"y(x) = {slope:.6g} x + {intercept:.6g}\n"
+                            f"R [Ω] = {1.0 / slope:.6g}"
+                        )
+                    else:
+                        equation_text = f"Linear Fit:\ny(x) = {slope:.6g} x + {intercept:.6g}\nR [Ω] = undefined"
+                else:
+                    coefficients = fit_quadratic(voltages, currents)
+                    a, b, c = coefficients
+                    order = 2
+                    diode = False
+                    equation_text = f"Quadratic Fit:\ny(x) = {a:.6g} x² + {b:.6g} x + {c:.6g}"
+            else:  # semiconductor
+                coefficients = fit_diode(voltages, currents)
+                slope, intercept = coefficients
+                I0 = math.exp(intercept)
+                VT = 1.0 / slope if slope != 0 else float('inf')
+                order = 1
+                diode = True
+                equation_text = f"Diode Model:\nI = {I0:.6g} * exp(V / {VT:.6g})"
             
             plot_widget = SweepPlotWidget(
-                voltages, currents, coefficients=coefficients, order=1, diode=False
+                voltages, currents, coefficients=coefficients, order=order, diode=diode
             )
+            self.plot_widget = plot_widget
+            self.current_voltages = voltages
+            self.current_currents = currents
             self.plot_layout.addWidget(plot_widget)
             
-            # Add equation display
-            if abs(slope) > 1e-18:
-                equation_text = (
-                    f"Linear Fit:\n"
-                    f"y(x) = {slope:.6g} x + {intercept:.6g}\n"
-                    f"R [Ω] = {1.0 / slope:.6g}"
-                )
-            else:
-                equation_text = f"Linear Fit:\ny(x) = {slope:.6g} x + {intercept:.6g}\nR [Ω] = undefined"
+            # Equation display as editable text
+            self.equation_text_edit = QTextEdit()
+            self.equation_text_edit.setPlainText(equation_text)
+            self.equation_text_edit.setReadOnly(True)
+            self.equation_text_edit.setMaximumHeight(80)
+            self.plot_layout.addWidget(self.equation_text_edit)
             
-            equation_label = QLabel(equation_text)
-            equation_label.setStyleSheet("font-family: Courier; font-size: 10pt;")
-            equation_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-            self.plot_layout.addWidget(equation_label)
+            # Copy button
+            copy_layout = QHBoxLayout()
+            copy_layout.addStretch()
+            copy_button = QPushButton("Copy")
+            copy_button.clicked.connect(lambda: QApplication.clipboard().setText(equation_text))
+            copy_layout.addWidget(copy_button)
+            self.plot_layout.addLayout(copy_layout)
+            
+            # Export buttons
+            export_layout = QHBoxLayout()
+            png_btn = QPushButton("Export PNG")
+            png_btn.clicked.connect(self.export_png)
+            csv_btn = QPushButton("Export CSV")
+            csv_btn.clicked.connect(self.export_csv)
+            export_layout.addWidget(png_btn)
+            export_layout.addWidget(csv_btn)
+            self.plot_layout.addLayout(export_layout)
             
         except Exception as exc:
             error_label = QLabel(f"Error displaying plot: {exc}")
             self.plot_layout.addWidget(error_label)
+
+    def export_png(self):
+        """Export the plot as PNG image."""
+        if not hasattr(self, 'plot_widget'):
+            QMessageBox.warning(self, "No Plot", "No plot available to export.")
+            return
+        filename, _ = QFileDialog.getSaveFileName(self, "Save Plot", "", "PNG Files (*.png)")
+        if filename:
+            pixmap = self.plot_widget.grab()
+            if not pixmap.save(filename, "PNG"):
+                QMessageBox.critical(self, "Export Error", "Failed to save PNG file.")
+
+    def export_csv(self):
+        """Export the data as CSV file."""
+        if not hasattr(self, 'current_voltages'):
+            QMessageBox.warning(self, "No Data", "No data available to export.")
+            return
+        filename, _ = QFileDialog.getSaveFileName(self, "Save Data", "", "CSV Files (*.csv)")
+        if filename:
+            try:
+                with open(filename, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["Voltage (V)", "Current (A)"])
+                    for v, c in zip(self.current_voltages, self.current_currents):
+                        writer.writerow([v, c])
+                QMessageBox.information(self, "Export Success", f"Data exported to {filename}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export Error", f"Failed to save CSV: {e}")
 
     def closeEvent(self, event):
         """Handle window close event with graceful instrument disconnect."""

@@ -107,6 +107,29 @@ def fit_quadratic(x_values, y_values):
     return a, b, intercept
 
 
+def fit_diode(voltages, currents):
+    """Fit diode model: ln(I) = ln(I_0) + V/V_T"""
+    # Filter out zero or negative currents to avoid log issues
+    valid = [(v, c) for v, c in zip(voltages, currents) if c > 0]
+    if len(valid) < 2:
+        return 0.0, 0.0  # fallback
+    
+    v_vals = [v for v, c in valid]
+    log_c = [math.log(c) for v, c in valid]
+    
+    # Linear fit on v_vals, log_c
+    n = len(v_vals)
+    x_mean = sum(v_vals) / n
+    y_mean = sum(log_c) / n
+    numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(v_vals, log_c))
+    denominator = sum((x - x_mean) ** 2 for x in v_vals)
+    if abs(denominator) < 1e-18:
+        return 0.0, y_mean
+    slope = numerator / denominator
+    intercept = y_mean - slope * x_mean
+    return slope, intercept
+
+
 def evaluate_quadratic(x, a, b, c):
     return a * x * x + b * x + c
 
@@ -127,25 +150,7 @@ class SweepPlotWidget(QWidget):
         self.x_min, self.x_max = _safe_range(self.voltages)
         self.y_min, self.y_max = _safe_range(self.currents)
 
-        # Adjust y range to include model curve
-        if self.coefficients is not None and self.x_max != self.x_min:
-            model_ys = []
-            for i in range(11):  # Sample 11 points across x range
-                x = self.x_min + (self.x_max - self.x_min) * i / 10
-                if self.diode:
-                    slope, intercept = self.coefficients
-                    y = math.exp(intercept + slope * x)
-                elif self.order == 1:
-                    b, c = self.coefficients
-                    y = evaluate_linear(x, b, c)
-                else:
-                    a, b, c = self.coefficients
-                    y = evaluate_quadratic(x, a, b, c)
-                model_ys.append(y)
-            model_y_min = min(model_ys)
-            model_y_max = max(model_ys)
-            self.y_min = min(self.y_min, model_y_min)
-            self.y_max = max(self.y_max, model_y_max)
+        # Use data points only for axis ranges (remove model curve adjustment)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -159,7 +164,14 @@ class SweepPlotWidget(QWidget):
         painter.setPen(QPen(QColor("black"), 1))
         painter.setFont(QFont("Arial", 10))
         painter.drawText(self.width() // 2 - 40, 20, "Voltage vs Current")
-        painter.drawText(10, self.height() // 2, "Current (A)")
+        
+        # Vertical Y axis label
+        painter.save()
+        painter.translate(15, self.height() // 2)
+        painter.rotate(-90)
+        painter.drawText(0, 0, "Current (A)")
+        painter.restore()
+        
         painter.drawText(self.width() // 2 - 40, self.height() - 10, "Voltage (V)")
 
         def map_x(x):
@@ -180,10 +192,23 @@ class SweepPlotWidget(QWidget):
             painter.drawLine(rect.left(), y, rect.right(), y)
 
         painter.setPen(QPen(QColor("black"), 1))
+        # Extreme labels
         painter.drawText(rect.left() - 40, rect.top() + 10, f"{self.y_max:.3g}")
         painter.drawText(rect.left() - 40, rect.bottom(), f"{self.y_min:.3g}")
         painter.drawText(rect.left(), rect.bottom() + 20, f"{self.x_min:.3g}")
         painter.drawText(rect.right() - 40, rect.bottom() + 20, f"{self.x_max:.3g}")
+        
+        # Intermediate tick labels
+        for step in range(1, 5):
+            # Y axis intermediate
+            y_val = self.y_max - (self.y_max - self.y_min) * step / 5
+            y_pos = rect.top() + rect.height() * step / 5
+            painter.drawText(rect.left() - 40, y_pos + 5, f"{y_val:.3g}")
+            
+            # X axis intermediate
+            x_val = self.x_min + (self.x_max - self.x_min) * step / 5
+            x_pos = rect.left() + rect.width() * step / 5
+            painter.drawText(x_pos - 20, rect.bottom() + 20, f"{x_val:.3g}")
 
         if len(self.voltages) > 1:
             painter.setPen(QPen(QColor("blue"), 2))
