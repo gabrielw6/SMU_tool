@@ -4,6 +4,8 @@ This module provides a lightweight window for displaying voltage/current sweep
 results and a fitted quadratic model when the user passes the `-g` flag.
 """
 
+import math
+
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QPainter, QPen, QColor, QFont
@@ -114,15 +116,36 @@ def evaluate_linear(x, b, c):
 
 
 class SweepPlotWidget(QWidget):
-    def __init__(self, voltages, currents, coefficients=None, order=2, parent=None):
+    def __init__(self, voltages, currents, coefficients=None, order=2, diode=False, parent=None):
         super().__init__(parent)
         self.voltages = voltages
         self.currents = currents
         self.coefficients = coefficients
         self.order = order
+        self.diode = diode
         self.setMinimumSize(700, 500)
         self.x_min, self.x_max = _safe_range(self.voltages)
         self.y_min, self.y_max = _safe_range(self.currents)
+
+        # Adjust y range to include model curve
+        if self.coefficients is not None and self.x_max != self.x_min:
+            model_ys = []
+            for i in range(11):  # Sample 11 points across x range
+                x = self.x_min + (self.x_max - self.x_min) * i / 10
+                if self.diode:
+                    slope, intercept = self.coefficients
+                    y = math.exp(intercept + slope * x)
+                elif self.order == 1:
+                    b, c = self.coefficients
+                    y = evaluate_linear(x, b, c)
+                else:
+                    a, b, c = self.coefficients
+                    y = evaluate_quadratic(x, a, b, c)
+                model_ys.append(y)
+            model_y_min = min(model_ys)
+            model_y_max = max(model_ys)
+            self.y_min = min(self.y_min, model_y_min)
+            self.y_max = max(self.y_max, model_y_max)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -180,7 +203,10 @@ class SweepPlotWidget(QWidget):
             path = None
             for index in range(model_points + 1):
                 x = self.x_min + (self.x_max - self.x_min) * index / model_points
-                if self.order == 1:
+                if self.diode:
+                    slope, intercept = self.coefficients
+                    y = math.exp(intercept + slope * x)
+                elif self.order == 1:
                     b, c = self.coefficients
                     y = evaluate_linear(x, b, c)
                 else:
@@ -201,8 +227,25 @@ class SweepPlotWidget(QWidget):
             painter.drawPoint(px, py)
 
 
-def plot_sweep_data(voltages, currents, order=2):
-    if order == 1:
+def plot_sweep_data(voltages, currents, order=2, diode=False):
+    if diode:
+        # Filter out non-positive currents for log
+        valid_data = [(v, i) for v, i in zip(voltages, currents) if i > 0]
+        if not valid_data:
+            equation = "No valid positive current data for diode model."
+            coefficients = None
+        else:
+            v_vals, i_vals = zip(*valid_data)
+            ln_i = [math.log(i) for i in i_vals]
+            coefficients = fit_linear(v_vals, ln_i)
+            slope, intercept = coefficients
+            I_0 = math.exp(intercept)
+            V_T = 1.0 / slope if abs(slope) > 1e-18 else float('inf')
+            if V_T == float('inf'):
+                equation = f"I(V) = {I_0:.6g} * exp(V / inf)"
+            else:
+                equation = f"I(V) = {I_0:.6g} * exp(V / {V_T:.6g})"
+    elif order == 1:
         coefficients = fit_linear(voltages, currents)
         slope, intercept = coefficients
         if abs(slope) > 1e-18:
@@ -227,7 +270,7 @@ def plot_sweep_data(voltages, currents, order=2):
 
     scene = QWidget()
     layout = QVBoxLayout(scene)
-    plot_widget = SweepPlotWidget(voltages, currents, coefficients=coefficients, order=order)
+    plot_widget = SweepPlotWidget(voltages, currents, coefficients=coefficients, order=order, diode=diode)
     layout.addWidget(plot_widget)
 
     equation_widget = QPlainTextEdit()

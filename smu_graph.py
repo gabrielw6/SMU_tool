@@ -92,6 +92,11 @@ def parse_args():
         help="Model order to fit to the sweep data: 1 for linear, 2 for quadratic.",
     )
     parser.add_argument(
+        "--diode",
+        action="store_true",
+        help="Fit diode model: ln(I) = ln(I_0) + V/V_T, displayed as I = I_0 * exp(V/V_T).",
+    )
+    parser.add_argument(
         "--delay",
         type=float,
         default=0.5,
@@ -183,7 +188,7 @@ def main():
 
                 voltages = [float(v) for v, _ in result if v != ""]
                 currents = [float(i) for _, i in result if i != ""]
-                plot_sweep_data(voltages, currents, order=args.order)
+                plot_sweep_data(voltages, currents, order=args.order, diode=args.diode)
 
             _export_data(args, result, headers=["Voltage (V)", "Current (A)"])
         else:
