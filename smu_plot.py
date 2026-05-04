@@ -166,6 +166,10 @@ class SweepPlotWidget(QWidget):
                 model_ys.append(y)
             if model_ys:
                 model_y_min, model_y_max = _safe_range(model_ys)
+                if self.diode:
+                    data_span = max(self.y_max - self.y_min, 1.0)
+                    cap_max = self.y_max + max(data_span * 10.0, 1.0)
+                    model_y_max = min(model_y_max, cap_max)
                 self.y_min = min(self.y_min, model_y_min)
                 self.y_max = max(self.y_max, model_y_max)
 
@@ -201,31 +205,23 @@ class SweepPlotWidget(QWidget):
                 return rect.bottom()
             return rect.bottom() - (y - self.y_min) / (self.y_max - self.y_min) * rect.height()
 
-        painter.setPen(QPen(QColor("gray"), 1, Qt.DashLine))
-        for step in range(1, 5):
-            x = rect.left() + rect.width() * step / 5
-            painter.drawLine(x, rect.top(), x, rect.bottom())
-            y = rect.top() + rect.height() * step / 5
-            painter.drawLine(rect.left(), y, rect.right(), y)
-
         painter.setPen(QPen(QColor("black"), 1))
         # Extreme labels
         painter.drawText(rect.left() - 40, rect.top() + 10, f"{self.y_max:.3g}")
         painter.drawText(rect.left() - 40, rect.bottom(), f"{self.y_min:.3g}")
         painter.drawText(rect.left(), rect.bottom() + 20, f"{self.x_min:.3g}")
         painter.drawText(rect.right() - 40, rect.bottom() + 20, f"{self.x_max:.3g}")
-        
-        # Intermediate tick labels
+
+        # Clip plot rendering to inside the axes rectangle so extreme model values don't draw outside
+        painter.save()
+        painter.setClipRect(rect)
+
+        painter.setPen(QPen(QColor("gray"), 1, Qt.DashLine))
         for step in range(1, 5):
-            # Y axis intermediate
-            y_val = self.y_max - (self.y_max - self.y_min) * step / 5
-            y_pos = rect.top() + rect.height() * step / 5
-            painter.drawText(rect.left() - 40, y_pos + 5, f"{y_val:.3g}")
-            
-            # X axis intermediate
-            x_val = self.x_min + (self.x_max - self.x_min) * step / 5
-            x_pos = rect.left() + rect.width() * step / 5
-            painter.drawText(x_pos - 20, rect.bottom() + 20, f"{x_val:.3g}")
+            x = rect.left() + rect.width() * step / 5
+            painter.drawLine(x, rect.top(), x, rect.bottom())
+            y = rect.top() + rect.height() * step / 5
+            painter.drawLine(rect.left(), y, rect.right(), y)
 
         if len(self.voltages) > 1:
             painter.setPen(QPen(QColor("blue"), 2))
@@ -254,6 +250,7 @@ class SweepPlotWidget(QWidget):
                 else:
                     a, b, c = self.coefficients
                     y = evaluate_quadratic(x, a, b, c)
+                y = max(min(y, self.y_max), self.y_min)
                 px = map_x(x)
                 py = map_y(y)
                 if path is None:
@@ -267,6 +264,8 @@ class SweepPlotWidget(QWidget):
             px = map_x(x)
             py = map_y(y)
             painter.drawPoint(px, py)
+
+        painter.restore()
 
 
 def plot_sweep_data(voltages, currents, order=2, diode=False):

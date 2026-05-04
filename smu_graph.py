@@ -540,7 +540,7 @@ class SMUMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SMU Control Interface")
-        self.setGeometry(100, 100, 1400, 700)
+        # Window geometry will be set in gui_main based on screen size
 
         main_widget = QWidget()
         main_layout = QHBoxLayout()
@@ -726,6 +726,16 @@ def gui_main():
     """Launch the GUI interface."""
     app = QApplication.instance() or QApplication(sys.argv)
     window = SMUMainWindow()
+    
+    # Set window size to 90% of available screen area
+    screen = app.primaryScreen()
+    available_geometry = screen.availableGeometry()
+    width = int(available_geometry.width() * 0.9)
+    height = int(available_geometry.height() * 0.9)
+    x = (available_geometry.width() - width) // 2
+    y = (available_geometry.height() - height) // 2
+    window.setGeometry(x, y, width, height)
+    
     window.show()
     sys.exit(app.exec())
 
