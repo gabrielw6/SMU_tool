@@ -150,7 +150,24 @@ class SweepPlotWidget(QWidget):
         self.x_min, self.x_max = _safe_range(self.voltages)
         self.y_min, self.y_max = _safe_range(self.currents)
 
-        # Use data points only for axis ranges (remove model curve adjustment)
+        # Adjust y range to include model curve if available
+        if self.coefficients is not None and self.x_max != self.x_min:
+            model_ys = []
+            for x in self.voltages:  # Use data x points for model y
+                if self.diode:
+                    slope, intercept = self.coefficients
+                    y = math.exp(intercept + slope * x)
+                elif self.order == 1:
+                    b, c = self.coefficients
+                    y = b * x + c
+                else:
+                    a, b, c = self.coefficients
+                    y = a * x**2 + b * x + c
+                model_ys.append(y)
+            if model_ys:
+                model_y_min, model_y_max = _safe_range(model_ys)
+                self.y_min = min(self.y_min, model_y_min)
+                self.y_max = max(self.y_max, model_y_max)
 
     def paintEvent(self, event):
         painter = QPainter(self)

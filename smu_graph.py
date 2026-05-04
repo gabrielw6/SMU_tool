@@ -211,10 +211,11 @@ class SweepThread(QThread):
 class SMUControlPanel(QWidget):
     """Left panel with device connectivity and acquisition parameters."""
 
-    def __init__(self, parent=None, plot_callback=None):
+    def __init__(self, parent=None, plot_callback=None, recalc_callback=None):
         super().__init__(parent)
         self.instrument = None
         self.plot_callback = plot_callback  # Callback to update plot in main window
+        self.recalc_callback = recalc_callback
         self.sweep_thread = None
         self.model_type = "resistive"
         self.model_order = 2
@@ -276,6 +277,11 @@ class SMUControlPanel(QWidget):
         order_layout.addWidget(self.first_radio)
         order_layout.addWidget(self.second_radio)
         model_layout.addLayout(order_layout)
+
+        # Recalculate using currently selected model settings and cached sweep data
+        self.recalc_model_btn = QPushButton("Recalculate Model")
+        self.recalc_model_btn.clicked.connect(self.on_recalculate_model_clicked)
+        model_layout.addWidget(self.recalc_model_btn)
 
         model_group.setLayout(model_layout)
         layout.addWidget(model_group)
@@ -414,6 +420,11 @@ class SMUControlPanel(QWidget):
         self.config_status_label.setText("")
         self.sweep_status_label.setText("")
 
+    def on_recalculate_model_clicked(self):
+        """Request a model recalculation using the current settings."""
+        if self.recalc_callback:
+            self.recalc_callback()
+
     def on_send_config(self):
         """Send configuration to the instrument."""
         if not self.is_connected():
@@ -543,12 +554,21 @@ class SMUMainWindow(QMainWindow):
         self.plot_area.setLayout(self.plot_layout)
 
         # Left control panel with plot callback
-        self.control_panel = SMUControlPanel(parent=None, plot_callback=self.on_plot_sweep_data)
+        self.current_voltages = []
+        self.current_currents = []
+        self.control_panel = SMUControlPanel(parent=self, plot_callback=self.on_plot_sweep_data, recalc_callback=self.recalculate_model)
         main_layout.addWidget(self.control_panel, 1)
         main_layout.addWidget(self.plot_area, 2)
 
         main_widget.setLayout(main_layout)
         self.setCentralWidget(main_widget)
+
+    def recalculate_model(self):
+        """Recalculate the model curve using the last acquired sweep data."""
+        if not self.current_voltages or not self.current_currents:
+            QMessageBox.warning(self, "No Data", "No sweep data available to recalculate the model.")
+            return
+        self.on_plot_sweep_data(self.current_voltages, self.current_currents)
 
     def on_plot_sweep_data(self, voltages, currents):
         """Update plot area with sweep data and model curve."""
@@ -559,8 +579,18 @@ class SMUMainWindow(QMainWindow):
             return
         
         # Clear previous layout
-        while self.plot_layout.count():
-            self.plot_layout.takeAt(0).widget().deleteLater()
+        def clear_layout(layout):
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget:
+                    widget.deleteLater()
+                else:
+                    sublayout = item.layout()
+                    if sublayout:
+                        clear_layout(sublayout)
+        
+        clear_layout(self.plot_layout)
         
         # Create a new plot widget (in-process, not a separate window)
         # We'll use the SweepPlotWidget from smu_plot
@@ -589,7 +619,10 @@ class SMUMainWindow(QMainWindow):
                     a, b, c = coefficients
                     order = 2
                     diode = False
-                    equation_text = f"Quadratic Fit:\ny(x) = {a:.6g} x² + {b:.6g} x + {c:.6g}"
+                    equation_text = (
+                        f"Quadratic Fit:\ny(x) = {a:.6g} x² + {b:.6g} x + {c:.6g}"
+                        f"\nR [Ω] = {1.0 / b:.6g}"
+                    )
             else:  # semiconductor
                 coefficients = fit_diode(voltages, currents)
                 slope, intercept = coefficients
@@ -606,6 +639,8 @@ class SMUMainWindow(QMainWindow):
             self.current_voltages = voltages
             self.current_currents = currents
             self.plot_layout.addWidget(plot_widget)
+            self.current_voltages = voltages
+            self.current_currents = currents
             
             # Equation display as editable text
             self.equation_text_edit = QTextEdit()
