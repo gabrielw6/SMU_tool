@@ -5,7 +5,10 @@ applies a current compliance limit, and reads the resulting resistance.
 """
 
 import argparse
+import csv
 import sys
+from datetime import datetime
+from pathlib import Path
 
 from smu_interface import (
     configure_b2901a_for_resistance,
@@ -72,6 +75,16 @@ def parse_args():
         help="Open a PySide GUI window with the sweep plot after data fetch.",
     )
     parser.add_argument(
+        "-x",
+        "--export",
+        nargs="?",
+        const="",
+        help=(
+            "Export measurement data to a CSV file. "
+            "If a filename is provided, save there; otherwise a default .csv name is generated."
+        ),
+    )
+    parser.add_argument(
         "--order",
         type=int,
         choices=[1, 2],
@@ -97,6 +110,40 @@ def parse_args():
         help="Open an interactive SCPI command line after the resistance measurement.",
     )
     return parser.parse_args()
+
+
+def _build_default_export_path(args, prefix="smu"):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    mode = "sweep" if args.sweep else "measurement"
+    filename = f"{prefix}_{mode}_{timestamp}.csv"
+    return Path(filename).resolve()
+
+
+def _write_csv(path, rows, headers=None):
+    path = Path(path)
+    if path.suffix.lower() != ".csv":
+        path = path.with_suffix(".csv")
+    if path.parent and not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open("w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        if headers:
+            writer.writerow(headers)
+        writer.writerows(rows)
+    return path
+
+
+def _export_data(args, rows, headers=None):
+    if args.export is None:
+        return None
+    if args.export == "":
+        export_path = _build_default_export_path(args)
+    else:
+        export_path = Path(args.export)
+    saved_path = _write_csv(export_path, rows, headers=headers)
+    print(f"Exported CSV data to {saved_path}")
+    return saved_path
 
 
 def main():
@@ -137,12 +184,16 @@ def main():
                 voltages = [float(v) for v, _ in result if v != ""]
                 currents = [float(i) for _, i in result if i != ""]
                 plot_sweep_data(voltages, currents, order=args.order)
+
+            _export_data(args, result, headers=["Voltage (V)", "Current (A)"])
         else:
             configure_b2901a_for_resistance(instrument, args.source, args.source_level, args.compliance)
             result = measure_resistance(instrument, args.delay)
             print("Resistance measurement result:")
             for label, value in result:
                 print(f"  {label}: {value}")
+
+            _export_data(args, result, headers=["Label", "Value"])
 
         if args.terminal:
             interactive_scpi_console(instrument)

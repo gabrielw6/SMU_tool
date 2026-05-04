@@ -214,7 +214,12 @@ def plot_sweep_data(voltages, currents, order=2):
             equation = f"y(x) = {slope:.6g} x + {intercept:.6g}\nR [Ω] = undefined"
     else:
         coefficients = fit_quadratic(voltages, currents)
-        equation = f"y(x) = {coefficients[0]:.6g} x^2 + {coefficients[1]:.6g} x + {coefficients[2]:.6g}"
+        a, b, c = coefficients
+        equation = f"y(x) = {a:.6g} x^2 + {b:.6g} x + {c:.6g}"
+        if abs(b) > 1e-18:
+            equation += f"\nR [Ω] = {1.0 / b:.6g}"
+        else:
+            equation += "\nR [Ω] = undefined"
 
     app = QApplication.instance() or QApplication([])
     window = QMainWindow()
